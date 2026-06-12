@@ -51,9 +51,9 @@ export function Hero({
         className="rise mx-auto mt-5 max-w-md text-center text-[15px] leading-relaxed text-ink-soft"
         style={{ animationDelay: "160ms" }}
       >
-        Sweep your whole{" "}
-        <strong className="font-semibold text-violet-deep">Farcaster</strong> circle —
-        everyone you follow and everyone following you — find who already lives on{" "}
+        Sweep everyone you follow on{" "}
+        <strong className="font-semibold text-violet-deep">Farcaster</strong>, find who
+        already lives on{" "}
         <strong className="font-semibold text-leaf-deep">Circles</strong>, and trust
         them from your Circles account, right here.
       </p>
@@ -126,6 +126,8 @@ export function Hero({
         Read-only lookup — no Farcaster login, nothing signed.
         <br />
         Trusting happens through your Circles Safe.
+        <br />
+        Already on Circles? Try the <strong className="text-ink-soft">Friends of friends</strong> tab.
       </p>
     </section>
   );

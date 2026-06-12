@@ -48,7 +48,63 @@ export function TrustGlyph({ state }: { state: TrustState }) {
   );
 }
 
-export function TrustBadge({ state }: { state: TrustState }) {
+// Trust circle not yet loaded (getTrustMap pending or failed, E8/D6): a neutral
+// dash that doesn't assert any relation. Not a TrustState value — driven by a
+// separate `loaded` prop so the union stays four-valued.
+function TrustGlyphUnknown() {
+  return (
+    <svg
+      width="30"
+      height="17"
+      viewBox="0 0 30 17"
+      className="isolate shrink-0"
+      aria-hidden="true"
+    >
+      <circle
+        cx="10.5"
+        cy="8.5"
+        r="6.7"
+        fill="none"
+        stroke="var(--color-ink-faint)"
+        strokeWidth="1.3"
+        strokeDasharray="1.5 2.5"
+        opacity={0.5}
+      />
+      <circle
+        cx="19.5"
+        cy="8.5"
+        r="6.7"
+        fill="none"
+        stroke="var(--color-ink-faint)"
+        strokeWidth="1.3"
+        strokeDasharray="1.5 2.5"
+        opacity={0.5}
+      />
+    </svg>
+  );
+}
+
+export function TrustBadge({
+  state,
+  loaded = true,
+}: {
+  state: TrustState;
+  /** False while the trust circle is unknown (D6) — render a neutral "—". */
+  loaded?: boolean;
+}) {
+  if (!loaded) {
+    return (
+      <span className="flex items-center gap-1.5 whitespace-nowrap">
+        <TrustGlyphUnknown />
+        <span
+          className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint"
+          title="Your trust circle hasn't loaded yet"
+        >
+          —
+        </span>
+      </span>
+    );
+  }
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap">
       <TrustGlyph state={state} />
