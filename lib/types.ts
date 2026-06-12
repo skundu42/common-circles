@@ -1,5 +1,7 @@
 // Shared shapes that cross the client/server boundary.
 
+import type { SourceId } from "@/lib/sources/types";
+
 /** A Farcaster account, normalized from the public client API. */
 export type FarcasterUser = {
   fid: number;
@@ -53,27 +55,41 @@ export type TrustState = "none" | "trusts" | "trustedBy" | "mutuallyTrusts";
 
 export type CirclesAvatarKind = "human" | "group" | "organization";
 
-/** One matched person: a Farcaster follow who is also a Circles avatar. */
+/** One matched person from ANY discovery source. Farcaster fields are optional
+ *  so onchain rows don't fake them; `displayName` stays required (universal). */
 export type Friend = {
-  fid: number;
-  /** The Circles avatar address (lowercase). */
+  /** The Circles avatar address (lowercase). React/dedupe key. UNCHANGED, universal. */
   address: string;
-  // Farcaster side
-  username: string;
+  /** Primary display name — UNIVERSAL & REQUIRED. FriendRow:147 renders it and
+   *  App.tsx trust toasts read it (×4). Farcaster: FC displayName. New sources:
+   *  `circlesName ?? shortenAddress(address)`. */
   displayName: string;
-  pfpUrl: string | null;
-  /** Follow direction relative to the scanned account. */
-  fcRelation: FcRelation;
-  // Circles side
+
+  // --- NEW: provenance + cross-source enrichment ---
+  /** Provenance. OPTIONAL so existing Friend literals (tests) still typecheck;
+   *  `undefined` is treated as "farcaster" by FriendRow/MatchList. buildFriends
+   *  + farcasterRow set "farcaster"; trust2 sets "trust2". */
+  source?: SourceId;
+  /** Secondary line for non-Farcaster rows ("Trusted by 4 of your contacts"). */
+  evidence?: string;
+  /** Source-native ranking weight (e.g. contact count for trust2). */
+  weight?: number;
+  /** Shared POAP eventIds with the connected wallet (set by future poap enrichment). */
+  poapShared?: number[];
+
+  // --- Farcaster-only (now optional) ---
+  fid?: number;
+  username?: string;           // FC handle; absent for onchain sources
+  pfpUrl?: string | null;      // FC avatar
+  fcRelation?: FcRelation;     // direction; drives the Farcaster-only dir filter
+  hydrated?: boolean;          // FC streaming-hydration flag
+  viaDeepScan?: boolean;
+
+  // --- Circles side (all sources) ---
   circlesName: string | null;
   circlesImageUrl: string | null;
   kind: CirclesAvatarKind;
-  // Trust (relative to the connected Safe)
   trust: TrustState;
-  /** True when found via the all-verifications deep scan, not the primary address. */
-  viaDeepScan: boolean;
-  /** False while FC profile fields are still placeholders (E15/D5). */
-  hydrated: boolean;
 };
 
 /** Unified failure ledger across the scan pipeline (E5). */

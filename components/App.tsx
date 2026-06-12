@@ -6,10 +6,19 @@ import { Header, type CirclesIdentity } from "@/components/Header";
 import { Hero } from "@/components/Hero";
 import { Results, type DeepState, type RetryState } from "@/components/Results";
 import { ScanProgress } from "@/components/ScanProgress";
+import { SourceResults, type SourceEmptyKind } from "@/components/SourceResults";
+import { SourceTabs } from "@/components/SourceTabs";
 import { Toast, type ToastState } from "@/components/Toast";
 import { VennMark } from "@/components/VennFigure";
 import { useWallet } from "@/components/wallet";
-import { clearCache, readCache, writeCache } from "@/lib/cache";
+import {
+  clearCache,
+  clearSourceCache,
+  readCache,
+  readSourceCache,
+  writeCache,
+  writeSourceCache,
+} from "@/lib/cache";
 import { fetchFarcasterUser } from "@/lib/api";
 import { getMyCirclesIdentity, getTrustMap, setTrust } from "@/lib/circles";
 import {
@@ -23,6 +32,9 @@ import {
   type ScanResult,
   type TrustMap,
 } from "@/lib/scan";
+import { matchSource } from "@/lib/sources/match";
+import { getSource } from "@/lib/sources/registry";
+import type { SourceId } from "@/lib/sources/types";
 import type { FarcasterUser, Friend, TrustState } from "@/lib/types";
 
 type Phase = "idle" | "scanning" | "results";
@@ -43,7 +55,9 @@ function patchHydration(
   if (patches.size === 0) return friends;
   let touched = false;
   const next = friends.map((f) => {
-    const u = patches.get(f.fid);
+    // fid is optional on Friend now (onchain sources have none); patches only
+    // ever target Farcaster rows, so a missing fid simply doesn't match.
+    const u = f.fid === undefined ? undefined : patches.get(f.fid);
     if (!u) return f;
     touched = true;
     return {
@@ -80,6 +94,27 @@ export function App() {
   const [busyAddress, setBusyAddress] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [suggestion, setSuggestion] = useState<FarcasterUser | null>(null);
+
+  // --- Discovery source (tab) state. ---
+  // `activeSource` starts on Farcaster and is promoted to trust2 once we know
+  // the connected wallet is a registered Circles avatar (unless the user picks
+  // a tab themselves). trust2 (and future snapshot) discovery state is flat
+  // here because MVP has a single non-Farcaster source; adding Snapshot means
+  // keying these by SourceId (e.g. Record<SourceId, SourceState>) — the
+  // documented follow-up.
+  const [activeSource, setActiveSource] = useState<SourceId>("farcaster");
+  const [sourceFriends, setSourceFriends] = useState<Friend[]>([]);
+  const [sourceStats, setSourceStats] = useState<Record<string, number>>({});
+  const [sourceTruncated, setSourceTruncated] = useState(false);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceFromCache, setSourceFromCache] = useState(false);
+  const [sourceCompletedAt, setSourceCompletedAt] = useState<number | null>(null);
+  // Bumped to invalidate stale trust2 discover runs (mirrors scanId).
+  const sourceRunId = useRef(0);
+  // True once the user explicitly clicks a tab — suppresses the default-tab
+  // promotion so we never override an intentional selection.
+  const userPickedTab = useRef(false);
 
   // Bumped to invalidate in-flight scans (cancel / reset / new scan).
   const scanId = useRef(0);
@@ -524,7 +559,14 @@ export function App() {
       });
       try {
         const hash = await setTrust(friend.address, trusted);
+        // Patch BOTH lists by address: the row lives in only one (Farcaster vs
+        // source), so patching both is safe and idempotent.
         setFriends((prev) =>
+          prev.map((f) =>
+            f.address === friend.address ? { ...f, trust: nextTrust(f.trust, trusted) } : f,
+          ),
+        );
+        setSourceFriends((prev) =>
           prev.map((f) =>
             f.address === friend.address ? { ...f, trust: nextTrust(f.trust, trusted) } : f,
           ),
@@ -554,8 +596,127 @@ export function App() {
     [busyAddress],
   );
 
+  // --- trust2 discovery: cache-first discover + match (mirrors handleScan). ---
+  // `bypassCache` skips the read (rescan path). Every state set is guarded by
+  // sourceRunId so a stale run can't clobber a newer one (mirrors scanId).
+  const runSource = useCallback(
+    async (seed: string, bypassCache: boolean) => {
+      const id = ++sourceRunId.current;
+      setSourceError(null);
+
+      if (!bypassCache) {
+        const cached = readSourceCache("trust2", seed);
+        if (cached) {
+          if (sourceRunId.current !== id) return;
+          setSourceFriends(cached.friends);
+          setSourceStats(cached.stats);
+          setSourceTruncated(cached.truncated);
+          setSourceCompletedAt(cached.completedAt);
+          setSourceFromCache(true);
+          setSourceLoading(false);
+          return;
+        }
+      }
+
+      setSourceLoading(true);
+      try {
+        const controller = new AbortController();
+        const res = await getSource("trust2").discover(seed, controller.signal);
+        if (sourceRunId.current !== id) return;
+        const friends = await matchSource(res, seed, controller.signal);
+        if (sourceRunId.current !== id) return;
+        const completedAt = Date.now();
+        setSourceFriends(friends);
+        setSourceStats(res.stats);
+        setSourceTruncated(!!res.truncated);
+        setSourceCompletedAt(completedAt);
+        setSourceFromCache(false);
+        setSourceLoading(false);
+        writeSourceCache("trust2", seed, friends, res.stats, !!res.truncated);
+      } catch {
+        if (sourceRunId.current !== id) return;
+        setSourceLoading(false);
+        setSourceError("Couldn't load friends of friends — try again.");
+      }
+    },
+    [],
+  );
+
+  // Default-tab promotion: once connected + registered, surface trust2 as the
+  // landing tab — unless the user has already picked a tab themselves.
+  useEffect(() => {
+    if (userPickedTab.current) return;
+    if (isConnected && identity?.registered) setActiveSource("trust2");
+  }, [isConnected, identity?.registered]);
+
+  // trust2 auto-run: cache-first discover + match whenever trust2 is the active
+  // tab and the connected wallet is a registered Circles avatar.
+  useEffect(() => {
+    if (activeSource !== "trust2" || !address || !identity?.registered) return;
+    void runSource(address.toLowerCase(), false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSource, address, identity?.registered]);
+
+  // Source trust-refresh: only on the cached-adopt path, re-run getTrustMap and
+  // patch sourceFriends.trust — mirrors the Farcaster E11 effect. A fresh run
+  // already has current trust from matchSource, so it skips this.
+  useEffect(() => {
+    if (!sourceFromCache || activeSource !== "trust2" || !address) return;
+    let cancelled = false;
+    getTrustMap(address.toLowerCase())
+      .then((map) => {
+        if (cancelled) return;
+        setSourceFriends((prev) =>
+          prev.map((f) => ({ ...f, trust: map.get(f.address) ?? "none" })),
+        );
+      })
+      .catch(() => {
+        /* leave the cached trust as-is on failure (degrade) */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSource, address, sourceCompletedAt, sourceFromCache]);
+
+  // Rescan: drop the cache and re-run discover (fromCache → false).
+  const handleSourceRescan = useCallback(() => {
+    if (!address) return;
+    const seed = address.toLowerCase();
+    clearSourceCache("trust2", seed);
+    void runSource(seed, true);
+  }, [address, runSource]);
+
+  // Tab selection: routes Farcaster to the EXISTING scan flow (never
+  // getSource("farcaster") — it's unregistered and throws).
+  const handleSelectSource = useCallback((id: SourceId) => {
+    userPickedTab.current = true;
+    setActiveSource(id);
+  }, []);
+
   const canAct = isConnected && (identity?.registered ?? false);
   const lockReason = !isConnected ? "no wallet" : "not on Circles";
+
+  // Empty-state discriminator for the trust2 tab (see §4's load-state table).
+  const sourceEmptyKind: SourceEmptyKind = !isConnected
+    ? "not-connected"
+    : identity?.registered === false
+      ? "not-avatar"
+      : (sourceStats.contacts ?? 0) === 0 && !sourceLoading && sourceCompletedAt != null
+        ? "no-first-degree"
+        : "no-matches";
+
+  // Tabs in registry order: trust2 first (default position), Farcaster always
+  // present. INSERTION POINT — append { id: "snapshot", label: "Shared DAOs" }.
+  const sourceTabs: { id: SourceId; label: string }[] = [
+    { id: "trust2", label: "Friends of friends" },
+    { id: "farcaster", label: "Farcaster" },
+  ];
+  // trust2 is greyed (not hidden) until the connected wallet is a registered
+  // Circles avatar.
+  const tabsDisabled = canAct
+    ? undefined
+    : { trust2: "Connect a Circles account" };
 
   // follower-only count (people who follow you that you don't follow back) —
   // drives the opt-in "check your followers" card. Derived from the relation map
@@ -574,57 +735,88 @@ export function App() {
         </p>
       )}
 
+      <SourceTabs
+        active={activeSource}
+        onSelect={handleSelectSource}
+        tabs={sourceTabs}
+        disabled={tabsDisabled}
+      />
+
       <main className="flex-1">
-        {phase === "idle" && (
-          <Hero onScan={handleScan} error={scanError} suggestion={suggestion} />
+        {activeSource === "farcaster" && (
+          <>
+            {phase === "idle" && (
+              <Hero onScan={handleScan} error={scanError} suggestion={suggestion} />
+            )}
+
+            {phase === "scanning" && (
+              <ScanProgress
+                handle={scanHandle}
+                user={scanUser}
+                progress={progress}
+                scanError={scanError}
+                failedStep={failedStep}
+                onCancel={handleCancel}
+                onRetryScan={handleRetryScan}
+              />
+            )}
+
+            {phase === "results" && result && (
+              <Results
+                user={result.user}
+                followingTotal={result.followingTotal}
+                followersTotal={result.followersTotal}
+                withWallet={result.withWallet}
+                truncated={result.truncated}
+                unchecked={result.unchecked}
+                autoSwept={result.autoSwept}
+                friends={friends}
+                failures={result.failures}
+                trustLoaded={result.trustLoaded}
+                retry={retry}
+                fromCache={fromCache}
+                completedAt={result.completedAt}
+                canAct={canAct}
+                lockReason={lockReason}
+                busyAddress={busyAddress}
+                deep={deep}
+                deepCandidateCount={result.deepScanCandidates.length}
+                deepScanLimit={
+                  result.bulkProvider
+                    ? result.deepScanCandidates.length
+                    : Math.min(DEEP_SCAN_CAP, result.deepScanCandidates.length)
+                }
+                followersScan={followersScan}
+                followerOnlyCount={followerOnlyCount}
+                onToggle={handleToggle}
+                onDeepScan={handleDeepScan}
+                onScanFollowers={handleScanFollowers}
+                onReset={handleReset}
+                onRetry={handleRetry}
+                onRetryTrust={handleRetryTrust}
+                onRescan={handleRescan}
+              />
+            )}
+          </>
         )}
 
-        {phase === "scanning" && (
-          <ScanProgress
-            handle={scanHandle}
-            user={scanUser}
-            progress={progress}
-            scanError={scanError}
-            failedStep={failedStep}
-            onCancel={handleCancel}
-            onRetryScan={handleRetryScan}
-          />
-        )}
-
-        {phase === "results" && result && (
-          <Results
-            user={result.user}
-            followingTotal={result.followingTotal}
-            followersTotal={result.followersTotal}
-            withWallet={result.withWallet}
-            truncated={result.truncated}
-            unchecked={result.unchecked}
-            autoSwept={result.autoSwept}
-            friends={friends}
-            failures={result.failures}
-            trustLoaded={result.trustLoaded}
-            retry={retry}
-            fromCache={fromCache}
-            completedAt={result.completedAt}
+        {activeSource === "trust2" && (
+          <SourceResults
+            source={getSource("trust2")}
+            friends={sourceFriends}
+            stats={sourceStats}
+            truncated={sourceTruncated}
+            loading={sourceLoading}
+            error={sourceError}
+            trustLoaded={sourceCompletedAt != null && !sourceLoading}
+            fromCache={sourceFromCache}
+            completedAt={sourceCompletedAt}
             canAct={canAct}
             lockReason={lockReason}
             busyAddress={busyAddress}
-            deep={deep}
-            deepCandidateCount={result.deepScanCandidates.length}
-            deepScanLimit={
-              result.bulkProvider
-                ? result.deepScanCandidates.length
-                : Math.min(DEEP_SCAN_CAP, result.deepScanCandidates.length)
-            }
-            followersScan={followersScan}
-            followerOnlyCount={followerOnlyCount}
+            emptyKind={sourceEmptyKind}
             onToggle={handleToggle}
-            onDeepScan={handleDeepScan}
-            onScanFollowers={handleScanFollowers}
-            onReset={handleReset}
-            onRetry={handleRetry}
-            onRetryTrust={handleRetryTrust}
-            onRescan={handleRescan}
+            onRescan={handleSourceRescan}
           />
         )}
       </main>

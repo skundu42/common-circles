@@ -11,7 +11,8 @@
 // deserialize trustLoaded resets to false.
 
 import type { ScanResult } from "@/lib/scan";
-import type { FcRelation } from "@/lib/types";
+import type { FcRelation, Friend } from "@/lib/types";
+import type { SourceId } from "@/lib/sources/types";
 
 // Bump whenever ScanResult's shape OR semantics change so stale entries are
 // invalidated instead of silently deserializing to undefined / wrong meaning.
@@ -135,6 +136,101 @@ export function clearCache(fid: number): void {
   if (!hasSessionStorage()) return;
   try {
     window.sessionStorage.removeItem(keyFor(fid));
+  } catch {
+    /* ignore */
+  }
+}
+
+// --- Source cache (trust2/snapshot). Separate version line from the scan cache. ---
+//
+// Unlike the scan cache, a source result needs NO Set/Map surgery: a Friend[] is
+// already plain JSON. Divergence from the scan cache: `friend.trust` is persisted
+// VERBATIM (it lives inside each Friend, fetched once by matchSource), not dropped
+// and refetched — App re-runs getTrustMap on the cached-adopt path to refresh it,
+// mirroring the Farcaster E11 flow.
+
+const SOURCE_CACHE_VERSION = 1;
+const SOURCE_TTL_MS = 30 * 60 * 1000; // 30 min, mirrors the scan cache
+const sourceKeyFor = (sourceId: SourceId, seed: string) =>
+  `common-circles:source:v${SOURCE_CACHE_VERSION}:${sourceId}:${seed.toLowerCase()}`;
+
+export type SourceCacheDTO = {
+  version: number;
+  completedAt: number;
+  sourceId: SourceId;
+  seed: string; // lowercased
+  friends: Friend[]; // plain objects; friend.trust kept verbatim (see note above).
+  stats: Record<string, number>;
+  truncated: boolean;
+};
+
+export type SourceCacheEntry = {
+  friends: Friend[];
+  stats: Record<string, number>;
+  truncated: boolean;
+  completedAt: number;
+};
+
+/**
+ * Read a cached source result for `(sourceId, seed)`. Returns null on miss,
+ * version mismatch, expired TTL (also evicting the stale entry), or ANY error.
+ */
+export function readSourceCache(
+  sourceId: SourceId,
+  seed: string,
+): SourceCacheEntry | null {
+  if (!hasSessionStorage()) return null;
+  const key = sourceKeyFor(sourceId, seed);
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (raw === null) return null;
+    const dto = JSON.parse(raw) as SourceCacheDTO;
+    if (dto.version !== SOURCE_CACHE_VERSION) return null;
+    if (Date.now() - dto.completedAt > SOURCE_TTL_MS) {
+      window.sessionStorage.removeItem(key);
+      return null;
+    }
+    return {
+      friends: dto.friends,
+      stats: dto.stats,
+      truncated: dto.truncated,
+      completedAt: dto.completedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a source result. Swallows quota / private-mode write failures. */
+export function writeSourceCache(
+  sourceId: SourceId,
+  seed: string,
+  friends: Friend[],
+  stats: Record<string, number>,
+  truncated: boolean,
+): void {
+  if (!hasSessionStorage()) return;
+  const dto: SourceCacheDTO = {
+    version: SOURCE_CACHE_VERSION,
+    completedAt: Date.now(),
+    sourceId,
+    seed: seed.toLowerCase(),
+    friends,
+    stats,
+    truncated,
+  };
+  try {
+    window.sessionStorage.setItem(sourceKeyFor(sourceId, seed), JSON.stringify(dto));
+  } catch {
+    /* quota exceeded / private mode: ignore */
+  }
+}
+
+/** Evict the cached source result for `(sourceId, seed)`. */
+export function clearSourceCache(sourceId: SourceId, seed: string): void {
+  if (!hasSessionStorage()) return;
+  try {
+    window.sessionStorage.removeItem(sourceKeyFor(sourceId, seed));
   } catch {
     /* ignore */
   }

@@ -2,20 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { FriendRow } from "@/components/FriendRow";
+import { MatchList } from "@/components/MatchList";
 import type { DeepScanProgress } from "@/lib/scan";
-import type { FarcasterUser, FcRelation, Friend, ScanFailures, TrustState } from "@/lib/types";
+import type { FarcasterUser, FcRelation, Friend, ScanFailures } from "@/lib/types";
 
-type Filter = "all" | TrustState;
 type DirFilter = "all" | FcRelation;
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "none", label: "Not yet" },
-  { key: "trustedBy", label: "Trusts you" },
-  { key: "trusts", label: "You trust" },
-  { key: "mutuallyTrusts", label: "Mutual" },
-];
 
 const DIR_FILTERS: { key: DirFilter; label: string }[] = [
   { key: "all", label: "Everyone" },
@@ -304,7 +295,6 @@ export function Results({
   onRetryTrust: () => void;
   onRescan: () => void;
 }) {
-  const [filter, setFilter] = useState<Filter>("all");
   const [dirFilter, setDirFilter] = useState<DirFilter>("all");
   const statusRef = useRef<HTMLDivElement | null>(null);
 
@@ -331,18 +321,6 @@ export function Results({
     [friends, dirFilter],
   );
 
-  const counts = useMemo(() => {
-    const c: Record<Filter, number> = {
-      all: byDirection.length,
-      none: 0,
-      trusts: 0,
-      trustedBy: 0,
-      mutuallyTrusts: 0,
-    };
-    for (const f of byDirection) c[f.trust]++;
-    return c;
-  }, [byDirection]);
-
   const dirCounts = useMemo(() => {
     const c: Record<DirFilter, number> = {
       all: friends.length,
@@ -350,12 +328,11 @@ export function Results({
       following: 0,
       follower: 0,
     };
-    for (const f of friends) c[f.fcRelation]++;
+    // Farcaster rows always carry fcRelation (set by buildFriends); guard the
+    // now-optional field so the direction tally stays type-safe.
+    for (const f of friends) if (f.fcRelation) c[f.fcRelation]++;
     return c;
   }, [friends]);
-
-  const visible =
-    filter === "all" ? byDirection : byDirection.filter((f) => f.trust === filter);
 
   const hydrationPending = friends.filter((f) => !f.hydrated).length;
 
@@ -516,50 +493,22 @@ export function Results({
             ))}
           </div>
 
-          <div
-            className="rise mt-3 flex flex-wrap gap-x-3 gap-y-1.5 border-b border-line"
-            style={{ animationDelay: "200ms" }}
-          >
-            {FILTERS.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                disabled={key !== "all" && !trustLoaded}
-                className={`flex min-h-[44px] items-center pb-0.5 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors disabled:opacity-40 ${
-                  filter === key
-                    ? "border-b-2 border-ink text-ink"
-                    : "text-ink-faint hover:text-ink-soft"
-                }`}
-              >
-                {label}
-                {/* D6: until the trust map loads, trust filters show "?" counts. */}
-                <span className="ml-1 tabular-nums">
-                  {key === "all" || trustLoaded ? counts[key] : "?"}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          {visible.length === 0 ? (
-            <p className="py-10 text-center text-sm text-ink-faint">
-              Nobody in this slice.
-            </p>
-          ) : (
-            <ol className="divide-y divide-line">
-              {visible.map((friend, i) => (
-                <FriendRow
-                  key={friend.address}
-                  friend={friend}
-                  index={i}
-                  canAct={canAct}
-                  lockReason={lockReason}
-                  busy={busyAddress === friend.address}
-                  trustLoaded={trustLoaded}
-                  onToggle={onToggle}
-                />
-              ))}
-            </ol>
-          )}
+          {/* Trust-state filter bar + the row list live in the shared MatchList.
+              The direction filter (above) stays here — it's Farcaster-only — and
+              we hand MatchList the already-direction-filtered `byDirection`. */}
+          <MatchList
+            friends={byDirection}
+            trustLoaded={trustLoaded}
+            canAct={canAct}
+            lockReason={lockReason}
+            busyAddress={busyAddress}
+            onToggle={onToggle}
+            emptyState={
+              <p className="py-10 text-center text-sm text-ink-faint">
+                Nobody in this slice.
+              </p>
+            }
+          />
         </>
       )}
 

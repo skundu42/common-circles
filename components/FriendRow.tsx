@@ -34,7 +34,9 @@ function AvatarPair({ friend }: { friend: Friend }) {
   const initial = (friend.circlesName ?? friend.displayName).slice(0, 1).toUpperCase();
   // Before hydration the FC avatar is unknown — show a neutral placeholder disc
   // in the SAME geometry rather than a stale initial from `FID 12345`.
-  if (!friend.hydrated) {
+  // Non-Farcaster rows have no `hydrated` flag (undefined → treat as resolved)
+  // so onchain avatars render immediately rather than stuck on the skeleton disc.
+  if (!(friend.hydrated ?? true)) {
     return (
       <div className="relative h-9 w-[52px] shrink-0">
         <span className="soft-pulse absolute left-0 top-0 h-9 w-9 rounded-full bg-parch ring-2 ring-violet/30" />
@@ -68,7 +70,7 @@ function AvatarPair({ friend }: { friend: Friend }) {
         />
       ) : (
         <span className="absolute left-0 top-0 flex h-9 w-9 items-center justify-center rounded-full bg-violet-wash font-display text-sm text-violet-deep ring-2 ring-violet/50">
-          {friend.username.slice(0, 1).toUpperCase()}
+          {initial}
         </span>
       )}
       {friend.circlesImageUrl ? (
@@ -108,6 +110,9 @@ export function FriendRow({
   onToggle: (friend: Friend, trusted: boolean) => void;
 }) {
   const trusted = friend.trust === "trusts" || friend.trust === "mutuallyTrusts";
+  // Provenance: undefined source is treated as "farcaster" (existing rows + test
+  // literals omit it). Non-Farcaster rows have no fid/username/fcRelation.
+  const isFarcaster = (friend.source ?? "farcaster") === "farcaster";
   const [confirming, setConfirming] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -142,36 +147,58 @@ export function FriendRow({
       <AvatarPair friend={friend} />
 
       <div className="min-w-0 flex-1 basis-40">
-        {friend.hydrated ? (
-          <div className="flex items-baseline gap-2">
-            <span className="truncate text-[15px] font-semibold">{friend.displayName}</span>
-            <a
-              href={`https://farcaster.xyz/${friend.username}`}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 font-mono text-[11px] text-violet-deep hover:underline"
-            >
-              @{friend.username}
-            </a>
-            <span
-              className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
-              title={RELATION_GLYPH[friend.fcRelation].title}
-            >
-              {RELATION_GLYPH[friend.fcRelation].glyph}
-            </span>
-          </div>
+        {isFarcaster ? (
+          friend.hydrated ? (
+            <div className="flex items-baseline gap-2">
+              <span className="truncate text-[15px] font-semibold">{friend.displayName}</span>
+              <a
+                href={`https://farcaster.xyz/${friend.username}`}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 font-mono text-[11px] text-violet-deep hover:underline"
+              >
+                @{friend.username}
+              </a>
+              {friend.fcRelation && (
+                <span
+                  className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
+                  title={RELATION_GLYPH[friend.fcRelation].title}
+                >
+                  {RELATION_GLYPH[friend.fcRelation].glyph}
+                </span>
+              )}
+            </div>
+          ) : (
+            // skeleton name line — same height, no stale `FID 12345` text
+            <div className="flex items-center gap-2" aria-hidden="true">
+              <span className="soft-pulse h-3.5 w-28 rounded bg-parch" />
+              {friend.fcRelation && (
+                <span
+                  className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
+                  title={RELATION_GLYPH[friend.fcRelation].title}
+                >
+                  {RELATION_GLYPH[friend.fcRelation].glyph}
+                </span>
+              )}
+            </div>
+          )
         ) : (
-          // skeleton name line — same height, no stale `FID 12345` text
-          <div className="flex items-center gap-2" aria-hidden="true">
-            <span className="soft-pulse h-3.5 w-28 rounded bg-parch" />
-            <span
-              className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
-              title={RELATION_GLYPH[friend.fcRelation].title}
-            >
-              {RELATION_GLYPH[friend.fcRelation].glyph}
-            </span>
+          // Onchain rows: no hydration skeleton, no @handle — the name line is
+          // the display name plus the source's evidence as a muted secondary line.
+          <div>
+            <span className="truncate text-[15px] font-semibold">{friend.displayName}</span>
+            {friend.evidence && (
+              <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">{friend.evidence}</p>
+            )}
           </div>
         )}
+        {/* Future-ready POAP badge slot — never fires in MVP (poapShared is
+            always undefined). Badge content lands with the POAP follow-up. */}
+        {friend.poapShared?.length ? (
+          <span className="mt-1 inline-block rounded-full border border-line px-1.5 py-px font-mono text-[9px] uppercase tracking-wider text-ink-soft">
+            {friend.poapShared.length} shared POAPs
+          </span>
+        ) : null}
         <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-soft">
           {friend.circlesName && (
             <span className="max-w-[10rem] truncate text-leaf-deep">{friend.circlesName}</span>

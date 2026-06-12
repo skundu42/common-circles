@@ -126,6 +126,8 @@ export function Hero({
         Read-only lookup — no Farcaster login, nothing signed.
         <br />
         Trusting happens through your Circles Safe.
+        <br />
+        Already on Circles? Try the <strong className="text-ink-soft">Friends of friends</strong> tab.
       </p>
     </section>
   );

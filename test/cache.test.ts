@@ -32,8 +32,13 @@ beforeEach(() => {
 });
 
 import { serialize, deserialize, readCache, writeCache, clearCache } from "@/lib/cache";
+import {
+  readSourceCache,
+  writeSourceCache,
+  clearSourceCache,
+} from "@/lib/cache";
 import type { ScanResult, TrustMap } from "@/lib/scan";
-import type { FarcasterUser, FcRelation } from "@/lib/types";
+import type { FarcasterUser, FcRelation, Friend } from "@/lib/types";
 
 const user: FarcasterUser = {
   fid: 42,
@@ -175,5 +180,102 @@ describe("clearCache", () => {
     expect(storage.getItem(keyFor(user.fid))).not.toBeNull();
     clearCache(user.fid);
     expect(storage.getItem(keyFor(user.fid))).toBeNull();
+  });
+});
+
+// --- Source cache (trust2/snapshot): (sourceId, seed) keying, TTL/version,
+// isolation, clear. Friend[] is plain JSON; friend.trust is kept verbatim. ---
+
+// Mirror cache.ts's sourceKeyFor for direct-storage assertions (v1).
+const sourceKeyFor = (sourceId: string, seed: string) =>
+  `common-circles:source:v1:${sourceId}:${seed.toLowerCase()}`;
+
+function sourceFriend(over: Partial<Friend> = {}): Friend {
+  return {
+    address: "0xabc",
+    displayName: "0xab…cdef",
+    source: "trust2",
+    evidence: "Trusted by 3 of your contacts",
+    weight: 3,
+    circlesName: null,
+    circlesImageUrl: null,
+    kind: "human",
+    trust: "trustedBy",
+    ...over,
+  };
+}
+
+describe("readSourceCache / writeSourceCache round-trip", () => {
+  it("survives a (sourceId, seed) round-trip with a case-insensitive seed; preserves friend.trust", () => {
+    const friends = [sourceFriend(), sourceFriend({ address: "0xdef", trust: "mutuallyTrusts" })];
+    const stats = { contacts: 12, candidates: 40 };
+    writeSourceCache("trust2", "0xSEED", friends, stats, false);
+
+    // read with a different-cased seed → key is lowercased on both sides.
+    const got = readSourceCache("trust2", "0xseed");
+    expect(got).not.toBeNull();
+    expect(got!.friends).toHaveLength(2);
+    expect(got!.friends[0].trust).toBe("trustedBy"); // trust kept verbatim
+    expect(got!.friends[1].trust).toBe("mutuallyTrusts");
+    expect(got!.stats).toEqual(stats);
+    expect(got!.truncated).toBe(false);
+    expect(typeof got!.completedAt).toBe("number");
+  });
+
+  it("isolates by seed and by sourceId", () => {
+    writeSourceCache("trust2", "0xseed", [sourceFriend()], {}, false);
+    // different seed → miss
+    expect(readSourceCache("trust2", "0xother")).toBeNull();
+    // different sourceId, same seed → miss (no cross-source bleed)
+    expect(readSourceCache("snapshot", "0xseed")).toBeNull();
+  });
+});
+
+describe("readSourceCache eviction", () => {
+  it("returns null on TTL expiry and evicts the stale entry", () => {
+    writeSourceCache("trust2", "0xseed", [sourceFriend()], {}, false);
+    const key = sourceKeyFor("trust2", "0xseed");
+    const dto = JSON.parse(storage.getItem(key)!);
+    // backdate completedAt past the 30-min TTL.
+    storage.setItem(
+      key,
+      JSON.stringify({ ...dto, completedAt: Date.now() - 31 * 60 * 1000 }),
+    );
+
+    expect(readSourceCache("trust2", "0xseed")).toBeNull();
+    expect(storage.getItem(key)).toBeNull(); // evicted
+  });
+
+  it("returns null on a version mismatch", () => {
+    writeSourceCache("trust2", "0xseed", [sourceFriend()], {}, false);
+    const key = sourceKeyFor("trust2", "0xseed");
+    const dto = JSON.parse(storage.getItem(key)!);
+    storage.setItem(key, JSON.stringify({ ...dto, version: 999 }));
+
+    expect(readSourceCache("trust2", "0xseed")).toBeNull();
+  });
+
+  it("returns null on corrupt JSON and on a miss", () => {
+    storage.setItem(sourceKeyFor("trust2", "0xseed"), "{not valid json");
+    expect(readSourceCache("trust2", "0xseed")).toBeNull();
+    expect(readSourceCache("trust2", "0xmissing")).toBeNull();
+  });
+});
+
+describe("writeSourceCache / clearSourceCache", () => {
+  it("swallows a thrown setItem (quota / private mode)", () => {
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
+      throw new DOMException("QuotaExceededError");
+    });
+    expect(() =>
+      writeSourceCache("trust2", "0xseed", [sourceFriend()], {}, false),
+    ).not.toThrow();
+  });
+
+  it("clearSourceCache evicts the (sourceId, seed) entry", () => {
+    writeSourceCache("trust2", "0xseed", [sourceFriend()], {}, false);
+    expect(storage.getItem(sourceKeyFor("trust2", "0xseed"))).not.toBeNull();
+    clearSourceCache("trust2", "0xSEED"); // case-insensitive seed
+    expect(storage.getItem(sourceKeyFor("trust2", "0xseed"))).toBeNull();
   });
 });

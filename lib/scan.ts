@@ -29,9 +29,15 @@ import type {
   ScanFailures,
   TrustState,
 } from "@/lib/types";
+import { sortFriends } from "@/lib/sources/sort";
 import { chunk, shortenAddress } from "@/lib/util";
 
 import type { AvatarInfo, Profile } from "@aboutcircles/sdk-types";
+
+// Re-export so existing importers of `@/lib/scan`'s sortFriends keep working;
+// the comparator + TRUST_ORDER now live in @/lib/sources/sort (shared with the
+// generic matcher). Farcaster ordering is byte-for-byte identical.
+export { sortFriends };
 
 /** Follow graphs up to this size get the full verification sweep inline. */
 const AUTO_SWEEP_LIMIT = 400;
@@ -88,21 +94,6 @@ export type ScanResult = {
 
 /** Monotonic scan id, assigned at runScan start (E5 retry guard). */
 let nextScanId = 1;
-
-const TRUST_ORDER: Record<TrustState, number> = {
-  trustedBy: 0, // they already trust you — most actionable
-  none: 1,
-  trusts: 2,
-  mutuallyTrusts: 3,
-};
-
-export function sortFriends(friends: Friend[]): Friend[] {
-  return [...friends].sort(
-    (a, b) =>
-      TRUST_ORDER[a.trust] - TRUST_ORDER[b.trust] ||
-      a.displayName.localeCompare(b.displayName),
-  );
-}
 
 /**
  * Synchronous: build placeholder Friends immediately from matched entries +
@@ -170,7 +161,9 @@ function applyHydration(
   patches: Map<number, FarcasterUser>,
 ): Friend[] {
   return friends.map((f) => {
-    const u = patches.get(f.fid);
+    // `fid` is now optional on Friend (other sources omit it); Farcaster rows
+    // always carry one, so this guard is a no-op at runtime for the scan path.
+    const u = f.fid !== undefined ? patches.get(f.fid) : undefined;
     if (u) {
       return {
         ...f,
