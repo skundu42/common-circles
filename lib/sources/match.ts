@@ -28,6 +28,8 @@ export async function matchSource(
   connectedAvatar: string | null, // for the trust map; usually == the seed (lowercased)
   signal?: AbortSignal,
 ): Promise<Friend[]> {
+  if (signal?.aborted) return [];
+
   const preVerified: Candidate[] = [];
   const toCheck: Candidate[] = [];
   for (const c of result.candidates) {

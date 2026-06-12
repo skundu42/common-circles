@@ -112,6 +112,9 @@ export function App() {
   const [sourceCompletedAt, setSourceCompletedAt] = useState<number | null>(null);
   // Bumped to invalidate stale trust2 discover runs (mirrors scanId).
   const sourceRunId = useRef(0);
+  // Aborts the in-flight trust2 discover/match RPC fan-out (cancel on tab-switch,
+  // rescan, wallet change, unmount). Mirrors the Farcaster `controller` ref.
+  const sourceController = useRef<AbortController | null>(null);
   // True once the user explicitly clicks a tab — suppresses the default-tab
   // promotion so we never override an intentional selection.
   const userPickedTab = useRef(false);
@@ -602,6 +605,10 @@ export function App() {
   const runSource = useCallback(
     async (seed: string, bypassCache: boolean) => {
       const id = ++sourceRunId.current;
+      // Cancel any in-flight run's RPC fan-out before starting/adopting another.
+      sourceController.current?.abort();
+      const controller = new AbortController();
+      sourceController.current = controller;
       setSourceError(null);
 
       if (!bypassCache) {
@@ -618,13 +625,19 @@ export function App() {
         }
       }
 
+      // Fresh run: clear any prior view (previous wallet / previous run) so the
+      // headline + stats don't show stale numbers under the loading skeleton.
+      setSourceFriends([]);
+      setSourceStats({});
+      setSourceTruncated(false);
+      setSourceCompletedAt(null);
+      setSourceFromCache(false);
       setSourceLoading(true);
       try {
-        const controller = new AbortController();
         const res = await getSource("trust2").discover(seed, controller.signal);
-        if (sourceRunId.current !== id) return;
+        if (sourceRunId.current !== id || controller.signal.aborted) return;
         const friends = await matchSource(res, seed, controller.signal);
-        if (sourceRunId.current !== id) return;
+        if (sourceRunId.current !== id || controller.signal.aborted) return;
         const completedAt = Date.now();
         setSourceFriends(friends);
         setSourceStats(res.stats);
@@ -634,7 +647,7 @@ export function App() {
         setSourceLoading(false);
         writeSourceCache("trust2", seed, friends, res.stats, !!res.truncated);
       } catch {
-        if (sourceRunId.current !== id) return;
+        if (sourceRunId.current !== id || controller.signal.aborted) return;
         setSourceLoading(false);
         setSourceError("Couldn't load friends of friends — try again.");
       }
@@ -646,14 +659,18 @@ export function App() {
   // landing tab — unless the user has already picked a tab themselves.
   useEffect(() => {
     if (userPickedTab.current) return;
-    if (isConnected && identity?.registered) setActiveSource("trust2");
-  }, [isConnected, identity?.registered]);
+    // Don't yank the user off an in-progress / completed Farcaster scan: only
+    // auto-promote from the idle landing state.
+    if (phase === "idle" && isConnected && identity?.registered) setActiveSource("trust2");
+  }, [isConnected, identity?.registered, phase]);
 
   // trust2 auto-run: cache-first discover + match whenever trust2 is the active
   // tab and the connected wallet is a registered Circles avatar.
   useEffect(() => {
     if (activeSource !== "trust2" || !address || !identity?.registered) return;
     void runSource(address.toLowerCase(), false);
+    // Abort the in-flight fan-out when leaving trust2 / changing wallet / unmount.
+    return () => sourceController.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSource, address, identity?.registered]);
 
@@ -700,11 +717,13 @@ export function App() {
   // Empty-state discriminator for the trust2 tab (see §4's load-state table).
   const sourceEmptyKind: SourceEmptyKind = !isConnected
     ? "not-connected"
-    : identity?.registered === false
-      ? "not-avatar"
-      : (sourceStats.contacts ?? 0) === 0 && !sourceLoading && sourceCompletedAt != null
-        ? "no-first-degree"
-        : "no-matches";
+    : identity == null
+      ? "checking" // connected, Circles identity still resolving — neutral copy
+      : !identity.registered
+        ? "not-avatar"
+        : (sourceStats.contacts ?? 0) === 0 && !sourceLoading && sourceCompletedAt != null
+          ? "no-first-degree"
+          : "no-matches";
 
   // Tabs in registry order: trust2 first (default position), Farcaster always
   // present. INSERTION POINT — append { id: "snapshot", label: "Shared DAOs" }.

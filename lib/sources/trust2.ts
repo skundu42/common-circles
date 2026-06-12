@@ -10,6 +10,10 @@ import type { DiscoverySource, SourceResult, Candidate } from "@/lib/sources/typ
 export const TRUST2_CONTACT_CAP = 150;
 /** Bounded concurrency for the per-contact getTrustMap fan-out. */
 const TRUST2_FANOUT = 8;
+/** Cap the second-degree candidate set we verify on-chain, ranked by vouch
+ *  count. A hub user's 150 contacts can trust thousands of distinct people;
+ *  verifying all of them is a slow RPC storm for diminishing (weight-1) signal. */
+export const TRUST2_CANDIDATE_CAP = 400;
 
 export const trust2Source: DiscoverySource = {
   id: "trust2",
@@ -28,10 +32,11 @@ export const trust2Source: DiscoverySource = {
     const mutuals = [...first].filter(([, r]) => r === "mutuallyTrusts").map(([a]) => a);
     const outward = [...first].filter(([, r]) => r === "trusts").map(([a]) => a);
     const contacts = [...mutuals, ...outward].slice(0, TRUST2_CONTACT_CAP);
-    const truncated = mutuals.length + outward.length > TRUST2_CONTACT_CAP;
+    const contactsTruncated = mutuals.length + outward.length > TRUST2_CONTACT_CAP;
 
     // 3. fan out: each contact's outward trusts. Bounded concurrency 8.
     const firstDegree = new Set(first.keys()); // for step-4 exclusion
+    let contactsFailed = 0; // contacts whose circle couldn't be read (RPC error)
     const perContact = await mapLimit(contacts, TRUST2_FANOUT, async (contact) => {
       if (signal?.aborted) return [] as string[];
       try {
@@ -40,7 +45,8 @@ export const trust2Source: DiscoverySource = {
           .filter(([, r]) => r === "trusts" || r === "mutuallyTrusts")
           .map(([a]) => a); // people my contact trusts outward
       } catch {
-        return [] as string[]; // degrade per contact, never throw
+        contactsFailed++; // degrade per contact, never throw — but count it
+        return [] as string[];
       }
     });
 
@@ -53,21 +59,33 @@ export const trust2Source: DiscoverySource = {
       }
     }
 
-    // 5. candidates — NOT preVerified (edges can point to groups/orgs; the
-    //    matcher's findCirclesAvatars filters to v2 humans).
-    const candidates: Candidate[] = [...tally].map(([address, count]) => ({
-      address,
-      weight: count,
-      evidence: `Trusted by ${count} of your contacts`,
-      preVerified: false,
-    }));
+    // 5. rank by vouch count (strongest second-degree edges first) and cap, so
+    //    the matcher's on-chain verification has a predictable ceiling no matter
+    //    how connected the seed is. NOT preVerified (edges can point to
+    //    groups/orgs; the matcher's findCirclesAvatars filters to v2 humans).
+    const ranked = [...tally].sort((a, b) => b[1] - a[1]);
+    const candidatesTruncated = ranked.length > TRUST2_CANDIDATE_CAP;
+    const candidates: Candidate[] = ranked
+      .slice(0, TRUST2_CANDIDATE_CAP)
+      .map(([address, count]) => ({
+        address,
+        weight: count,
+        evidence: `Trusted by ${count} of your contacts`,
+        preVerified: false,
+      }));
 
     // 6. stats for the meta row.
+    const stats: Record<string, number> = {
+      contacts: contacts.length,
+      candidates: tally.size,
+    };
+    if (contactsFailed > 0) stats.contactsFailed = contactsFailed;
+
     return {
       sourceId: "trust2",
       candidates,
-      stats: { contacts: contacts.length, candidates: tally.size },
-      truncated,
+      stats,
+      truncated: contactsTruncated || candidatesTruncated,
     };
   },
 };

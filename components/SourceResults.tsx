@@ -17,6 +17,7 @@ function minutesAgo(completedAt: number): string {
 export type SourceEmptyKind =
   | "not-connected"
   | "not-avatar"
+  | "checking"
   | "no-first-degree"
   | "no-matches"
   | null;
@@ -24,6 +25,7 @@ export type SourceEmptyKind =
 const EMPTY_COPY: Record<Exclude<SourceEmptyKind, null>, string> = {
   "not-connected": "Connect a Circles account to see friends of friends.",
   "not-avatar": "Your connected wallet isn’t a registered Circles avatar yet.",
+  checking: "Checking your Circles account…",
   "no-first-degree":
     "You don’t trust anyone yet — scan Farcaster to find people to trust first.",
   "no-matches": "No friends-of-friends found among your contacts’ circles.",
@@ -103,8 +105,16 @@ export function SourceResults({
           </>
         )}
         {truncated && (
-          <span className="text-rust" title="Some contacts weren’t fanned out">
+          <span className="text-rust" title="Showing your strongest second-degree matches">
             · capped at your closest contacts
+          </span>
+        )}
+        {(stats.contactsFailed ?? 0) > 0 && (
+          <span
+            className="text-rust"
+            title="RPC errors while reading some contacts’ circles"
+          >
+            · {(stats.contactsFailed ?? 0).toLocaleString()} contacts couldn’t be checked
           </span>
         )}
         {/* cache provenance, mirrors the Farcaster meta row. */}
@@ -139,13 +149,18 @@ export function SourceResults({
 
       {/* ---- loading skeleton ---- */}
       {!error && loading && (
-        <div className="mt-8 space-y-3" aria-hidden="true">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-3 py-2">
-              <span className="soft-pulse h-9 w-9 rounded-full bg-parch" />
-              <span className="soft-pulse h-3.5 w-40 rounded bg-parch" />
-            </div>
-          ))}
+        <div className="mt-8">
+          <p className="rise font-mono text-[11px] text-ink-faint">
+            Scanning your contacts’ circles…
+          </p>
+          <div className="mt-4 space-y-3" aria-hidden="true">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 py-2">
+                <span className="soft-pulse h-9 w-9 rounded-full bg-parch" />
+                <span className="soft-pulse h-3.5 w-40 rounded bg-parch" />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -16,7 +16,7 @@ vi.mock("@/lib/circles", async (importOriginal) => {
   return { ...actual, getTrustMap };
 });
 
-import { trust2Source, TRUST2_CONTACT_CAP } from "@/lib/sources/trust2";
+import { trust2Source, TRUST2_CONTACT_CAP, TRUST2_CANDIDATE_CAP } from "@/lib/sources/trust2";
 
 const rel = (entries: [string, Relation][]) => new Map<string, Relation>(entries);
 
@@ -113,5 +113,26 @@ describe("trust2 discover", () => {
     expect(byAddr.get("0xgood")!.weight).toBe(1); // B's contribution survives
     expect(res.candidates).toHaveLength(1); // A's failed fan-out contributes nothing
     expect(res.stats.contacts).toBe(2);
+    expect(res.stats.contactsFailed).toBe(1); // the failed contact is surfaced
+  });
+
+  it("caps the candidate set at TRUST2_CANDIDATE_CAP, strongest vouches first, sets truncated", async () => {
+    // A trusts CAP+50 distinct strangers (weight 1); B re-trusts the first 5
+    // (weight 2). The 5 strongest must survive the cap; the total is reported.
+    const many = Array.from({ length: TRUST2_CANDIDATE_CAP + 50 }, (_, i) => `0xs${i}`);
+    getTrustMap.mockImplementation(async (addr: string) => {
+      if (addr === "0xseed") return rel([["0xa", "trusts"], ["0xb", "trusts"]]);
+      if (addr === "0xa") return rel(many.map((a) => [a, "trusts"] as [string, Relation]));
+      if (addr === "0xb")
+        return rel(many.slice(0, 5).map((a) => [a, "trusts"] as [string, Relation]));
+      return rel([]);
+    });
+
+    const res = await trust2Source.discover("0xseed");
+
+    expect(res.candidates).toHaveLength(TRUST2_CANDIDATE_CAP);
+    expect(res.truncated).toBe(true);
+    expect(res.stats.candidates).toBe(TRUST2_CANDIDATE_CAP + 50); // total discovered
+    expect(res.candidates.slice(0, 5).every((c) => c.weight === 2)).toBe(true);
   });
 });
