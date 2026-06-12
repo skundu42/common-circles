@@ -28,18 +28,24 @@ export type ConnectionsResponse = {
   followingTotal: number;
   /** Distinct accounts following the scanned fid. */
   followersTotal: number;
-  /** How many of the union have a primary verified ethereum address. */
+  /** How many of the following set have a primary verified ethereum address. */
   withWallet: number;
-  /** True when either direction was larger than the scan cap. */
+  /** True when the following direction (the default scan) was capped. */
   truncated: boolean;
-  /** Connections whose wallet lookup failed even after retries (rate limit). */
+  /** Count of follows whose primary-wallet lookup failed (= uncheckedFids.length). */
   unchecked: number;
-  /** Union of both directions, mutual follows first. */
+  /** Identities of those connections — drives targeted retry (E1). */
+  uncheckedFids: number[];
+  /** True when a bulk provider (Neynar key) is active server-side — lets the
+   * client lift the deep-scan cap since lookups are no longer per-fid. */
+  bulkProvider: boolean;
+  /** People `fid` follows that have a primary wallet, mutual follows first. */
   entries: ConnectionEntry[];
   followingFids: number[];
   followerFids: number[];
 };
 
+// VerificationsRow shape UNCHANGED. Route response shape changes (see api.ts/routes).
 export type VerificationsRow = { fid: number; addresses: string[] };
 
 /** Trust relation between the connected Safe and a counterparty avatar. */
@@ -66,4 +72,18 @@ export type Friend = {
   trust: TrustState;
   /** True when found via the all-verifications deep scan, not the primary address. */
   viaDeepScan: boolean;
+  /** False while FC profile fields are still placeholders (E15/D5). */
+  hydrated: boolean;
+};
+
+/** Unified failure ledger across the scan pipeline (E5). */
+export type ScanFailures = {
+  /** FIDs whose primary-address lookup failed (from connections.uncheckedFids). */
+  primaryFids: number[];
+  /** FIDs whose verification fetch failed during a sweep (E3 failedFids). */
+  verificationFids: number[];
+  /** lowercaseAddress -> fid for avatar batches that failed the RPC (E4). */
+  addresses: Map<string, number>;
+  /** True when getTrustMap failed and trust is unknown (E8). */
+  trustUnavailable: boolean;
 };

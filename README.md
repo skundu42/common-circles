@@ -3,11 +3,17 @@
 **Your Farcaster friends, found in the Circles trust graph.**
 
 A [Circles](https://aboutcircles.com) embedded miniapp: enter a Farcaster handle, it
-sweeps that account's whole circle — **everyone they follow and everyone following
-them** — finds the ones who are registered Circles **v2 human avatars** on Gnosis
-Chain (groups, organizations and v1-only signups are excluded), shows where they
-stand in *your* trust circle — and lets you trust / untrust them straight from your
-Safe, without leaving the host.
+sweeps **the people that account follows** — the most relevant set — finds the ones
+who are registered Circles **v2 human avatars** on Gnosis Chain (groups,
+organizations and v1-only signups are excluded), shows where they stand in *your*
+trust circle — and lets you trust / untrust them straight from your Safe, without
+leaving the host. After results, an opt-in second pass can also check **people who
+follow you** that you don't follow back.
+
+> Coverage is bounded: the default scan checks up to 8,000 of the people you follow;
+> the opt-in followers pass checks up to 4,000 followers. Anything beyond that, plus
+> any lookups the upstream APIs rate-limit, is reported as "not checked" and can be
+> retried — it is never silently dropped.
 
 Built from scratch on the dependency set of
 [`aboutcircles/embedded-miniapp-boilerplate`](https://github.com/aboutcircles/embedded-miniapp-boilerplate)
@@ -17,7 +23,7 @@ Built from scratch on the dependency set of
 
 ```
 input ────► handle / ENS / 0x address ─► fid, profile, verified wallets
-fid ──────► snap.farcaster.xyz (hub) ──► following + followers (mutuals first)
+fid ──────► snap.farcaster.xyz (hub) ──► following (mutuals first); followers fetched for labeling + opt-in pass
 fids ─────► /fc/primary-addresses ─────► primary ETH wallet per person (bulk ×100)
 wallets ──► circles_getAvatarInfoBatch ► who is a registered Circles avatar
 matches ──► profiles + trust relations ► names, images, trusts/trustedBy/mutual
@@ -27,6 +33,18 @@ row ──────► hubV2.trust(addr, expiry) ─► encoded client-side, 
 - **Farcaster data** comes from the free public APIs (`api.farcaster.xyz` + a public
   Snapchain node) — no API key, no Farcaster login. Calls are proxied through Next.js
   route handlers (`app/api/farcaster/*`) so the browser never fights CORS.
+- **Bulk provider (optional, server-side).** Two env vars can swap the bulk profile /
+  verification / primary-address lookups off the rate-limited keyless path onto a
+  bulk-capable provider. When a bulk provider is active the deep scan also lifts its
+  per-fid cap and sweeps every unmatched connection. The follow graph always stays on
+  Snapchain. Selection order (first match wins):
+  1. **`NEYNAR_API_KEY`** — routes through Neynar's bulk endpoints (a quota swap; the key
+     is never shipped to the client). Per-IP rate limiting activates only when this is set.
+  2. **`HYPERSNAP_NODE_URL`** — a key-free [HyperSnap](https://hypersnap.org) Farcaster
+     node (e.g. `https://haatz.quilibrium.com`, or self-hosted). Its bulk endpoint
+     returns hundreds of fids per call with no API key and no per-IP limit — bulk speed
+     without paying. Same underlying Farcaster data.
+  Leave both unset to run fully key-less against `api.farcaster.xyz`.
 - **The input accepts three shapes**: a Farcaster handle, an ENS name, or a raw
   `0x` address. Handles are tried as usernames first (Farcaster usernames can *be*
   ENS names, e.g. `hellno.eth`); otherwise resolution falls back to
@@ -49,15 +67,17 @@ Most Circles v2 avatars are Safes, while Farcaster verifications are usually EOA
 so a follow's *primary* wallet often isn't their Circles address. The scan therefore
 runs two passes:
 
-1. **Primary pass** — bulk primary-address lookup for every connection (cheap).
-2. **Verification sweep** — *all* verified addresses per connection (1 upstream call
-   per fid). For connection graphs ≤ 400 this runs automatically inside the main
-   scan; for larger graphs it's offered as an explicit **deep scan** over the first
-   300 unmatched connections, closest relationships (mutual follows) first.
+1. **Primary pass** — bulk primary-address lookup for every followed account (cheap).
+2. **Verification sweep** — *all* verified addresses per account (1 upstream call
+   per fid). For follow graphs ≤ 400 this runs automatically inside the main scan;
+   for larger graphs it's offered as an explicit **deep scan** over the first 300
+   unmatched follows, closest relationships (mutual follows) first.
 
-Both directions are capped at 4,000 fids each; results carry a per-person follow
-direction (⇄ mutual · → you follow · ← follows you) that can be filtered alongside
-trust state.
+The default scan covers up to 8,000 of the people you follow; a separate opt-in
+pass after results sweeps up to 4,000 of the **people who follow you** that you
+don't follow back. Anything past those caps is reported as "not checked" rather
+than implied to be covered. Results carry a per-person follow direction (⇄ mutual ·
+→ you follow · ← follows you) that can be filtered alongside trust state.
 
 ## Develop
 
@@ -80,7 +100,7 @@ app/
   page.tsx / layout.tsx       single route, fonts, WalletProvider
   api/farcaster/
     user/route.ts             handle/ENS/address → fid + profile + wallets
-    connections/route.ts      fid → following+followers with primary addresses
+    connections/route.ts      fid → following (scanned) with primary addresses; followers fetched for labeling
     users/route.ts            fids → hydrated profiles (matched only)
     verifications/route.ts    fids → all verified ETH addresses (sweep)
 components/

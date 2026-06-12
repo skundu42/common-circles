@@ -96,8 +96,7 @@
 
 @keyframes soft-pulse {
   50% {
-    opacity: 0.35;
-    transform: scale(0.82);
+    opacity: 0.45;
   }
 }
 
@@ -116,11 +115,11 @@
 }
 
 .venn-fast .venn-l {
-  animation-duration: 1.4s;
+  animation-duration: 2.8s;
 }
 
 .venn-fast .venn-r {
-  animation-duration: 1.4s;
+  animation-duration: 2.8s;
 }
 
 .rise {

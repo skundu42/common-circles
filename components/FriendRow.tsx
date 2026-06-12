@@ -32,6 +32,29 @@ function Spinner() {
 
 function AvatarPair({ friend }: { friend: Friend }) {
   const initial = (friend.circlesName ?? friend.displayName).slice(0, 1).toUpperCase();
+  // Before hydration the FC avatar is unknown — show a neutral placeholder disc
+  // in the SAME geometry rather than a stale initial from `FID 12345`.
+  if (!friend.hydrated) {
+    return (
+      <div className="relative h-9 w-[52px] shrink-0">
+        <span className="soft-pulse absolute left-0 top-0 h-9 w-9 rounded-full bg-parch ring-2 ring-violet/30" />
+        {friend.circlesImageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={friend.circlesImageUrl}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="absolute left-4 top-0 h-9 w-9 rounded-full bg-parch object-cover ring-2 ring-leaf/60"
+          />
+        ) : (
+          <span className="absolute left-4 top-0 flex h-9 w-9 items-center justify-center rounded-full bg-leaf-wash font-display text-sm text-leaf-deep ring-2 ring-leaf/60">
+            {initial}
+          </span>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="relative h-9 w-[52px] shrink-0">
       {friend.pfpUrl ? (
@@ -72,6 +95,7 @@ export function FriendRow({
   canAct,
   lockReason,
   busy,
+  trustLoaded = true,
   onToggle,
 }: {
   friend: Friend;
@@ -79,6 +103,8 @@ export function FriendRow({
   canAct: boolean;
   lockReason: string;
   busy: boolean;
+  /** False while the trust circle is unknown (D6) — neutral badge, button stays on. */
+  trustLoaded?: boolean;
   onToggle: (friend: Friend, trusted: boolean) => void;
 }) {
   const trusted = friend.trust === "trusts" || friend.trust === "mutuallyTrusts";
@@ -116,23 +142,36 @@ export function FriendRow({
       <AvatarPair friend={friend} />
 
       <div className="min-w-0 flex-1 basis-40">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-[15px] font-semibold">{friend.displayName}</span>
-          <a
-            href={`https://farcaster.xyz/${friend.username}`}
-            target="_blank"
-            rel="noreferrer"
-            className="shrink-0 font-mono text-[11px] text-violet-deep hover:underline"
-          >
-            @{friend.username}
-          </a>
-          <span
-            className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
-            title={RELATION_GLYPH[friend.fcRelation].title}
-          >
-            {RELATION_GLYPH[friend.fcRelation].glyph}
-          </span>
-        </div>
+        {friend.hydrated ? (
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-[15px] font-semibold">{friend.displayName}</span>
+            <a
+              href={`https://farcaster.xyz/${friend.username}`}
+              target="_blank"
+              rel="noreferrer"
+              className="shrink-0 font-mono text-[11px] text-violet-deep hover:underline"
+            >
+              @{friend.username}
+            </a>
+            <span
+              className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
+              title={RELATION_GLYPH[friend.fcRelation].title}
+            >
+              {RELATION_GLYPH[friend.fcRelation].glyph}
+            </span>
+          </div>
+        ) : (
+          // skeleton name line — same height, no stale `FID 12345` text
+          <div className="flex items-center gap-2" aria-hidden="true">
+            <span className="soft-pulse h-3.5 w-28 rounded bg-parch" />
+            <span
+              className="shrink-0 cursor-default font-mono text-[11px] text-ink-faint"
+              title={RELATION_GLYPH[friend.fcRelation].title}
+            >
+              {RELATION_GLYPH[friend.fcRelation].glyph}
+            </span>
+          </div>
+        )}
         <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-soft">
           {friend.circlesName && (
             <span className="max-w-[10rem] truncate text-leaf-deep">{friend.circlesName}</span>
@@ -163,7 +202,7 @@ export function FriendRow({
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-3">
-        <TrustBadge state={friend.trust} />
+        <TrustBadge state={friend.trust} loaded={trustLoaded} />
         {canAct ? (
           <button
             onClick={handleClick}

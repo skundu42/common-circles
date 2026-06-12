@@ -28,27 +28,45 @@ export async function getSdk(): Promise<Sdk> {
 }
 
 /**
+ * Result of an avatar lookup: matched avatars plus the addresses whose batch
+ * failed the RPC (after one retry) so callers can surface / retry them (E4).
+ */
+export type AvatarLookup = {
+  avatars: Map<string, AvatarInfo>;
+  /** lowercase addresses whose batch failed after the retry. */
+  failedAddresses: string[];
+};
+
+/**
  * Which of `addresses` are registered Circles v2 HUMAN avatars. Groups,
  * organizations and v1-only signups are excluded — they aren't people you'd
- * trust from this app. Returns a map keyed by lowercase address;
- * non-matching addresses are absent.
+ * trust from this app. Returns matched avatars keyed by lowercase address;
+ * a batch that throws is retried once, then its addresses are reported in
+ * `failedAddresses` rather than silently dropped (E4).
  */
 export async function findCirclesAvatars(
   addresses: string[],
-): Promise<Map<string, AvatarInfo>> {
+): Promise<AvatarLookup> {
   const sdk = await getSdk();
-  const map = new Map<string, AvatarInfo>();
-  if (addresses.length === 0) return map;
+  const avatars = new Map<string, AvatarInfo>();
+  const failedAddresses: string[] = [];
+  if (addresses.length === 0) return { avatars, failedAddresses };
   const batches = chunk(addresses, 100);
-  const results = await mapLimit(batches, 4, (batch) =>
-    sdk.rpc.avatar.getAvatarInfoBatch(batch as Address[]),
-  );
-  for (const infos of results) {
-    for (const info of infos) {
-      if (info.version === 2 && info.isHuman) map.set(info.avatar.toLowerCase(), info);
+  await mapLimit(batches, 4, async (batch) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const infos = await sdk.rpc.avatar.getAvatarInfoBatch(batch as Address[]);
+        for (const info of infos) {
+          if (info.version === 2 && info.isHuman) avatars.set(info.avatar.toLowerCase(), info);
+        }
+        return;
+      } catch {
+        // first failure: retry once; second failure: report the whole batch
+        if (attempt === 1) failedAddresses.push(...batch.map((a) => a.toLowerCase()));
+      }
     }
-  }
-  return map;
+  });
+  return { avatars, failedAddresses };
 }
 
 /** Circles profiles (name/image) for avatars, keyed by lowercase address. */

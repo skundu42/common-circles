@@ -1,5 +1,7 @@
 import { errorResponse, resolveFarcasterUser, UpstreamError } from "@/lib/farcaster-server";
 
+export const maxDuration = 30;
+
 function notFoundMessage(input: string): string {
   if (/^0x[0-9a-f]{40}$/.test(input)) {
     return "No Farcaster account is linked to that address (resolution works via its primary ENS name).";
