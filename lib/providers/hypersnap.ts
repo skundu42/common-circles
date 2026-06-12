@@ -15,9 +15,13 @@ import { chunk, mapLimit } from "@/lib/util";
 import { UpstreamError, type FarcasterProvider } from "@/lib/farcaster-server";
 import type { FarcasterUser, VerificationsRow } from "@/lib/types";
 
-/** Public reference node by default; override via env to self-host. */
-export const HYPERSNAP_NODE_URL =
-  process.env.HYPERSNAP_NODE_URL?.replace(/\/$/, "") ?? "";
+/** Default bulk provider: the public HyperSnap reference node (key-free). Set
+ * HYPERSNAP_NODE_URL to point at a self-hosted node, or to "" to disable
+ * HyperSnap and fall back to the keyless api.farcaster.xyz path. */
+const DEFAULT_HYPERSNAP_NODE = "https://haatz.quilibrium.com";
+export const HYPERSNAP_NODE_URL = (
+  process.env.HYPERSNAP_NODE_URL ?? DEFAULT_HYPERSNAP_NODE
+).replace(/\/$/, "");
 /** The bulk endpoint serves hundreds per call; 200 keeps a single failed chunk's
  * blast radius small while still being only ~20 calls for a 4,000 cap. */
 const BULK_LIMIT = 200;

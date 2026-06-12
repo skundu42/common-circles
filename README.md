@@ -33,18 +33,17 @@ row ──────► hubV2.trust(addr, expiry) ─► encoded client-side, 
 - **Farcaster data** comes from the free public APIs (`api.farcaster.xyz` + a public
   Snapchain node) — no API key, no Farcaster login. Calls are proxied through Next.js
   route handlers (`app/api/farcaster/*`) so the browser never fights CORS.
-- **Bulk provider (optional, server-side).** Two env vars can swap the bulk profile /
-  verification / primary-address lookups off the rate-limited keyless path onto a
-  bulk-capable provider. When a bulk provider is active the deep scan also lifts its
-  per-fid cap and sweeps every unmatched connection. The follow graph always stays on
-  Snapchain. Selection order (first match wins):
+- **Bulk provider (server-side).** Bulk profile / verification / primary-address lookups
+  go through a bulk-capable provider, which lets the deep scan lift its per-fid cap and
+  sweep every unmatched connection. The follow graph always stays on Snapchain.
+  Selection order (first match wins):
   1. **`NEYNAR_API_KEY`** — routes through Neynar's bulk endpoints (a quota swap; the key
      is never shipped to the client). Per-IP rate limiting activates only when this is set.
   2. **`HYPERSNAP_NODE_URL`** — a key-free [HyperSnap](https://hypersnap.org) Farcaster
-     node (e.g. `https://haatz.quilibrium.com`, or self-hosted). Its bulk endpoint
-     returns hundreds of fids per call with no API key and no per-IP limit — bulk speed
-     without paying. Same underlying Farcaster data.
-  Leave both unset to run fully key-less against `api.farcaster.xyz`.
+     node. **Defaults to the public node `https://haatz.quilibrium.com`** (same underlying
+     Farcaster data; hundreds of fids per call, no API key, no per-IP limit), so bulk
+     lookups work out of the box. Set this to point at a self-hosted node, or to `""` to
+     disable HyperSnap and fall back to the keyless `api.farcaster.xyz` path.
 - **The input accepts three shapes**: a Farcaster handle, an ENS name, or a raw
   `0x` address. Handles are tried as usernames first (Farcaster usernames can *be*
   ENS names, e.g. `hellno.eth`); otherwise resolution falls back to
